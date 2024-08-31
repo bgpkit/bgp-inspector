@@ -1,14 +1,14 @@
 import type { PageServerLoad } from './$types';
 import type { ASNData } from '../../../types/ASNData';
 import type { RadarData } from '../../../types/RadarData';
+import { RADAR_API_TOKEN } from '$env/static/private';
 
-
-async function fetchRadarData(asn: number, env): Promise<RadarData> {
+async function fetchRadarData(asn: number, radarApiToken: string): Promise<RadarData> {
   const options = {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${env.RADAR_API_TOKEN}`
+      'Authorization': `Bearer ${radarApiToken}`
     }
   };
   console.log(options);
@@ -33,12 +33,16 @@ async function fetchRadarData(asn: number, env): Promise<RadarData> {
 }
 
 export const load: PageServerLoad = async ({ params, platform }) => {
-  console.log(platform.env);
   const asnNumber = params.number;
+
+  let radarApiToken = RADAR_API_TOKEN || platform?.env.RADAR_API_TOKEN;
+  if (!radarApiToken) {
+    console.error('RADAR_API_TOKEN is not set in the environment');
+  }
 
   const [rankResponse, radarData] = await Promise.all([
     fetch(`https://api.asrank.caida.org/v2/restful/asns/${asnNumber}`),
-    fetchRadarData(Number(asnNumber), platform.env)
+    fetchRadarData(Number(asnNumber), radarApiToken)
   ]);
 
   const rankData: ASNData = await rankResponse.json();

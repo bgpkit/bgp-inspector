@@ -21,7 +21,7 @@
         <input
             type="number"
             bind:value={searchValue}
-            placeholder="Enter a number"
+            placeholder="Enter an AS number"
             min="0"
             on:keypress={handleKeyPress}
             class="p-2 text-base border rounded"

@@ -1,38 +1,16 @@
-# create-svelte
+# BGP Security Inspector
 
-Everything you need to build a Svelte project, powered by [`create-svelte`](https://github.com/sveltejs/kit/tree/main/packages/create-svelte).
+BGP Security Inspector is a tool to inspect the security of BGP (Border Gateway Protocol) networks. It allows you to lookup AS numbers and inspect the security of the ASN.
 
-## Creating a project
+The website is available at https://bgp-inspector.pages.dev/
 
-If you're seeing this, you've probably already done this step. Congrats!
+## Features
 
-```bash
-# create a new project in the current directory
-npm create svelte@latest
+- Lookup AS numbers
+- View the RPKI validation status
+- View the degree and ASRank of the ASN
+- View the APNIC RPKI route origin validation status
 
-# create a new project in my-app
-npm create svelte@latest my-app
-```
+## License
 
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```bash
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```bash
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://kit.svelte.dev/docs/adapters) for your target environment.
+This project is licensed under the MIT License. See the LICENSE file for more details.

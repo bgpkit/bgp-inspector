@@ -2,13 +2,28 @@
   import { tick, onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { Chart, DoughnutController, ArcElement, Tooltip, Legend } from 'chart.js';
   import type { ASNRecord } from '../types/ASNData';
   import type { RadarData } from '../types/RadarData';
 
-  Chart.register(DoughnutController, ArcElement, Tooltip, Legend);
+  // Chart.js loaded dynamically (browser-only — avoids SSR issues)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let ChartClass: any = null;
 
   type RadarStats = RadarData['result']['stats'];
+
+  type RPKIWindow = { seen: number; filtered: number; filter_rate: number };
+  type RPKIRecord = {
+    date: string;
+    as: string;
+    '7': RPKIWindow;
+    '14': RPKIWindow;
+    '28': RPKIWindow;
+    '112': RPKIWindow;
+  };
+
+  const WINDOWS = ['1M', '3M', '6M', '1Y', 'All'] as const;
+  type TimeWindow = typeof WINDOWS[number];
+  const WINDOW_DAYS: Record<TimeWindow, number> = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, 'All': Infinity };
 
   let searchValue = '';
   let loading = false;
@@ -17,24 +32,46 @@
   let radarData: RadarStats | null = null;
   let hasSearched = false;
 
+  // Donut chart
   let chartCanvas: HTMLCanvasElement | null = null;
-  let chart: Chart | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let chart: any = null;
 
-  onMount(() => {
+  // History chart
+  let rpkiHistory: RPKIRecord[] = [];
+  let historyLoading = false;
+  let historyWindow: TimeWindow = '1Y';
+  let historyCanvas: HTMLCanvasElement | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let historyChart: any = null;
+
+  onMount(async () => {
+    const { Chart, DoughnutController, ArcElement, LineController, LineElement,
+            PointElement, CategoryScale, LinearScale, Filler, Tooltip, Legend } =
+      await import('chart.js');
+    Chart.register(DoughnutController, ArcElement, LineController, LineElement,
+                   PointElement, CategoryScale, LinearScale, Filler, Tooltip, Legend);
+    ChartClass = Chart;
+
     const asn = $page.url.searchParams.get('asn');
-    if (asn) {
-      searchValue = asn;
-      search();
-    }
+    if (asn) { searchValue = asn; search(); }
   });
 
-  onDestroy(() => { if (chart) chart.destroy(); });
+  onDestroy(() => {
+    if (chart) chart.destroy();
+    if (historyChart) historyChart.destroy();
+  });
 
   function formatNum(n: number): string {
     if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
     if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
     return n.toLocaleString();
+  }
+
+  function getFilteredHistory(): RPKIRecord[] {
+    const days = WINDOW_DAYS[historyWindow];
+    return days === Infinity ? rpkiHistory : rpkiHistory.slice(-days);
   }
 
   async function search() {
@@ -49,18 +86,20 @@
     errorMsg = null;
     rankData = null;
     radarData = null;
+    rpkiHistory = [];
     hasSearched = true;
     if (chart) { chart.destroy(); chart = null; }
+    if (historyChart) { historyChart.destroy(); historyChart = null; }
 
     goto(`/?asn=${asn}`, { replaceState: true, noScroll: true, keepFocus: true });
 
     try {
       const res = await fetch(`/api/asn/${asn}`);
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const body = await res.json().catch(() => ({})) as { message?: string };
         throw new Error(body.message || `Request failed (HTTP ${res.status})`);
       }
-      const data = await res.json();
+      const data = await res.json() as { rankData: ASNRecord | null; radarData: RadarData['result']['stats'] | null };
       rankData = data.rankData;
       radarData = data.radarData;
     } catch (e) {
@@ -70,15 +109,33 @@
     }
 
     await tick();
-    initChart();
+    initDonutChart();
+
+    // History loads separately — non-blocking
+    fetchHistory(asn);
   }
 
-  function initChart() {
-    if (chart) { chart.destroy(); chart = null; }
-    if (!radarData || !chartCanvas) return;
+  async function fetchHistory(asn: number) {
+    historyLoading = true;
+    try {
+      const res = await fetch(`/api/rpki-history/${asn}`);
+      if (res.ok) {
+        rpkiHistory = await res.json();
+        await tick();
+        initHistoryChart();
+      }
+    } catch {
+      // history is supplementary — fail silently
+    } finally {
+      historyLoading = false;
+    }
+  }
 
+  function initDonutChart() {
+    if (chart) { chart.destroy(); chart = null; }
+    if (!radarData || !chartCanvas || !ChartClass) return;
     const total = radarData.routes_valid + radarData.routes_unknown + radarData.routes_invalid;
-    chart = new Chart(chartCanvas, {
+    chart = new ChartClass(chartCanvas, {
       type: 'doughnut',
       data: {
         labels: ['Valid', 'Unknown', 'Invalid'],
@@ -94,9 +151,7 @@
         maintainAspectRatio: false,
         cutout: '68%',
         plugins: {
-          legend: {
-            display: false,
-          },
+          legend: { display: false },
           tooltip: {
             callbacks: {
               label: (ctx) => {
@@ -111,6 +166,112 @@
     });
   }
 
+  function initHistoryChart() {
+    if (historyChart) { historyChart.destroy(); historyChart = null; }
+    if (!rpkiHistory.length || !historyCanvas || !ChartClass) return;
+    const filtered = getFilteredHistory();
+    historyChart = new ChartClass(historyCanvas, {
+      type: 'line',
+      data: {
+        labels: filtered.map(d => d.date),
+        datasets: [
+          {
+            label: '7-day',
+            data: filtered.map(d => d['7'].filter_rate),
+            borderColor: '#93c5fd',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.3,
+            order: 3,
+          },
+          {
+            label: '28-day',
+            data: filtered.map(d => d['28'].filter_rate),
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59,130,246,0.08)',
+            fill: true,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.3,
+            order: 2,
+          },
+          {
+            label: '112-day',
+            data: filtered.map(d => d['112'].filter_rate),
+            borderColor: '#1e40af',
+            backgroundColor: 'transparent',
+            borderWidth: 2.5,
+            pointRadius: 0,
+            tension: 0.3,
+            order: 1,
+          },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: {
+            ticks: {
+              maxTicksLimit: 10,
+              maxRotation: 0,
+              color: '#94a3b8',
+              font: { size: 11 },
+              callback(_, i) {
+                const d = filtered[i]?.date ?? '';
+                return d.slice(0, 7);
+              }
+            },
+            grid: { display: false },
+            border: { color: '#e2e8f0' },
+          },
+          y: {
+            min: 0,
+            max: 100,
+            ticks: {
+              stepSize: 25,
+              color: '#94a3b8',
+              font: { size: 11 },
+              callback: (v) => `${v}%`,
+            },
+            grid: { color: '#f1f5f9' },
+            border: { display: false },
+          }
+        },
+        plugins: {
+          legend: {
+            position: 'top',
+            align: 'end',
+            labels: { boxWidth: 20, boxHeight: 2, padding: 16, color: '#64748b', font: { size: 12 } }
+          },
+          tooltip: {
+            backgroundColor: '#1e293b',
+            titleColor: '#94a3b8',
+            bodyColor: '#f1f5f9',
+            padding: 10,
+            callbacks: {
+              title: (items) => items[0]?.label ?? '',
+              label: (ctx) => `  ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}% filtered`
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function setWindow(w: Window) {
+    historyWindow = w;
+    if (!historyChart) return;
+    const filtered = getFilteredHistory();
+    historyChart.data.labels = filtered.map(d => d.date);
+    historyChart.data.datasets[0].data = filtered.map(d => d['7'].filter_rate);
+    historyChart.data.datasets[1].data = filtered.map(d => d['28'].filter_rate);
+    historyChart.data.datasets[2].data = filtered.map(d => d['112'].filter_rate);
+    historyChart.update('none');
+  }
+
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key === 'Enter') search();
   }
@@ -121,6 +282,11 @@
   $: validPct   = rpkiTotal > 0 ? Math.round((radarData!.routes_valid   / rpkiTotal) * 100) : 0;
   $: unknownPct = rpkiTotal > 0 ? Math.round((radarData!.routes_unknown / rpkiTotal) * 100) : 0;
   $: invalidPct = rpkiTotal > 0 ? Math.round((radarData!.routes_invalid / rpkiTotal) * 100) : 0;
+
+  $: currentAsn = rankData?.asn ?? searchValue.trim().replace(/^as/i, '');
+
+  // Latest filter rate for the summary badge
+  $: latestRecord = rpkiHistory.length ? rpkiHistory[rpkiHistory.length - 1] : null;
 </script>
 
 <div class="min-h-screen bg-slate-50 flex flex-col font-sans">
@@ -130,14 +296,13 @@
     <div class="max-w-5xl mx-auto flex items-center gap-3">
       <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
         <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.955 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
         </svg>
       </div>
       <div class="flex-1 min-w-0">
         <h1 class="text-base font-semibold text-slate-900 leading-tight">BGP Security Inspector</h1>
         <p class="text-xs text-slate-400">by <a href="https://bgpkit.com" target="_blank" rel="noopener noreferrer" class="hover:text-blue-600 transition-colors">BGPKIT</a></p>
       </div>
-      <!-- Inline search in header when results are showing -->
       {#if hasSearched}
         <div class="flex items-center gap-2">
           <div class="relative">
@@ -154,15 +319,13 @@
             on:click={search}
             disabled={loading}
             class="px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {loading ? '…' : 'Go'}
-          </button>
+          >{loading ? '…' : 'Go'}</button>
         </div>
       {/if}
     </div>
   </header>
 
-  <!-- Hero search (shown when no results yet) -->
+  <!-- Hero (no results yet) -->
   {#if !hasSearched}
     <section class="flex-1 flex flex-col items-center justify-center px-6 py-16">
       <div class="text-center mb-8 max-w-lg">
@@ -184,9 +347,7 @@
           on:click={search}
           disabled={loading}
           class="px-6 py-3 bg-blue-600 text-white text-base font-medium rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-        >
-          {loading ? 'Loading…' : 'Inspect'}
-        </button>
+        >{loading ? 'Loading…' : 'Inspect'}</button>
       </div>
       {#if errorMsg}
         <p class="mt-3 text-sm text-red-600">{errorMsg}</p>
@@ -195,14 +356,11 @@
     </section>
 
   {:else}
-    <!-- Results area -->
     <main class="flex-1 px-6 py-6">
       <div class="max-w-5xl mx-auto space-y-4">
 
         {#if errorMsg}
-          <div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-            {errorMsg}
-          </div>
+          <div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">{errorMsg}</div>
         {/if}
 
         {#if loading}
@@ -216,14 +374,14 @@
 
         {:else if !rankData && !radarData && !errorMsg}
           <div class="text-center py-24">
-            <p class="text-slate-500 text-sm">No data found for AS{searchValue.trim().replace(/^as/i, '')}.</p>
+            <p class="text-slate-500 text-sm">No data found for AS{currentAsn}.</p>
             <p class="text-slate-400 text-xs mt-1">This ASN may not exist or is not in the CAIDA database.</p>
           </div>
 
         {:else}
           <!-- ASN identity bar -->
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span class="font-mono text-2xl font-bold text-slate-900">AS{rankData?.asn ?? searchValue.trim().replace(/^as/i, '')}</span>
+            <span class="font-mono text-2xl font-bold text-slate-900">AS{currentAsn}</span>
             {#if rankData?.asnName}
               <span class="text-xl text-slate-600 font-light">{rankData.asnName}</span>
             {/if}
@@ -235,13 +393,12 @@
             {/if}
           </div>
 
+          <!-- Top row: Overview + RPKI snapshot -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-            <!-- AS Overview -->
             {#if rankData}
             <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-5">
               <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-widest">Overview</h2>
-
               <dl class="space-y-2.5">
                 <div class="flex justify-between items-baseline">
                   <dt class="text-sm text-slate-500">Organization</dt>
@@ -252,34 +409,33 @@
                   <dd class="text-sm font-mono font-semibold text-slate-900">{rankData.country.iso}</dd>
                 </div>
               </dl>
-
-              <!-- Routing Cone -->
               <div>
                 <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">Routing Cone</p>
                 <div class="grid grid-cols-3 gap-2">
-                  <div class="bg-slate-50 rounded-lg p-3 text-center border border-slate-100">
-                    <div class="text-xl font-bold text-slate-900 tabular-nums">{formatNum(rankData.cone.numberAsns)}</div>
-                    <div class="text-xs text-slate-500 mt-0.5">ASes</div>
-                  </div>
-                  <div class="bg-slate-50 rounded-lg p-3 text-center border border-slate-100">
-                    <div class="text-xl font-bold text-slate-900 tabular-nums">{formatNum(rankData.cone.numberPrefixes)}</div>
-                    <div class="text-xs text-slate-500 mt-0.5">Prefixes</div>
-                  </div>
-                  <div class="bg-slate-50 rounded-lg p-3 text-center border border-slate-100">
-                    <div class="text-xl font-bold text-slate-900 tabular-nums">{formatNum(rankData.cone.numberAddresses)}</div>
-                    <div class="text-xs text-slate-500 mt-0.5">Addresses</div>
-                  </div>
+                  {#each [
+                    { label: 'ASes',      n: rankData.cone.numberAsns      },
+                    { label: 'Prefixes',  n: rankData.cone.numberPrefixes  },
+                    { label: 'Addresses', n: rankData.cone.numberAddresses },
+                  ] as item}
+                    <div class="bg-slate-50 rounded-lg p-3 text-center border border-slate-100">
+                      <div class="text-xl font-bold text-slate-900 tabular-nums">{formatNum(item.n)}</div>
+                      <div class="text-xs text-slate-500 mt-0.5">{item.label}</div>
+                    </div>
+                  {/each}
                 </div>
               </div>
-
-              <!-- BGP Connections -->
               <div>
                 <p class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">BGP Connections</p>
                 <div class="grid grid-cols-4 gap-2">
-                  {#each [['Customers', rankData.asnDegree.customer, 'text-slate-900'], ['Peers', rankData.asnDegree.peer, 'text-slate-900'], ['Providers', rankData.asnDegree.provider, 'text-slate-900'], ['Total', rankData.asnDegree.total, 'text-blue-600']] as [label, val, color]}
+                  {#each [
+                    { label: 'Customers', n: rankData.asnDegree.customer, color: 'text-slate-900' },
+                    { label: 'Peers',     n: rankData.asnDegree.peer,     color: 'text-slate-900' },
+                    { label: 'Providers', n: rankData.asnDegree.provider, color: 'text-slate-900' },
+                    { label: 'Total',     n: rankData.asnDegree.total,    color: 'text-blue-600'  },
+                  ] as item}
                     <div class="text-center">
-                      <div class="text-lg font-bold tabular-nums {color}">{val.toLocaleString()}</div>
-                      <div class="text-xs text-slate-500 mt-0.5">{label}</div>
+                      <div class="text-lg font-bold tabular-nums {item.color}">{item.n.toLocaleString()}</div>
+                      <div class="text-xs text-slate-500 mt-0.5">{item.label}</div>
                     </div>
                   {/each}
                 </div>
@@ -287,12 +443,9 @@
             </div>
             {/if}
 
-            <!-- RPKI Validation -->
             {#if radarData}
             <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-5">
               <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-widest">RPKI Route Validation</h2>
-
-              <!-- Doughnut chart -->
               <div class="relative h-44 flex items-center justify-center">
                 <canvas bind:this={chartCanvas}></canvas>
                 <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none">
@@ -300,8 +453,6 @@
                   <span class="text-xs text-slate-500">valid</span>
                 </div>
               </div>
-
-              <!-- Legend with progress bars -->
               <div class="space-y-3">
                 {#each [
                   { label: 'Valid',   count: radarData.routes_valid,   pct: validPct,   color: 'bg-emerald-500', text: 'text-emerald-700', bg: 'bg-emerald-50' },
@@ -323,8 +474,6 @@
                   </div>
                 {/each}
               </div>
-
-              <!-- Route counts -->
               <div class="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
                 <div class="text-center">
                   <div class="text-base font-bold font-mono text-slate-900 tabular-nums">{radarData.distinct_prefixes.toLocaleString()}</div>
@@ -340,25 +489,58 @@
 
           </div>
 
-          <!-- APNIC RPKI History -->
+          <!-- ROV Adoption History -->
           <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-            <div class="flex items-center justify-between mb-4">
-              <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-widest">RPKI History</h2>
-              <a
-                href="https://stats.labs.apnic.net/rpki/AS{rankData?.asn ?? searchValue.trim().replace(/^as/i, '')}"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-xs text-blue-600 hover:underline"
-              >Open on APNIC ↗</a>
+            <div class="flex flex-wrap items-start justify-between gap-3 mb-5">
+              <div>
+                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1">ROV Filtering Rate</h2>
+                <p class="text-xs text-slate-400">% of internet vantage points enforcing RPKI for routes from AS{currentAsn}</p>
+              </div>
+              <div class="flex items-center gap-1">
+                {#if historyLoading}
+                  <span class="text-xs text-slate-400 mr-2">Loading history…</span>
+                {/if}
+                {#if latestRecord}
+                  <span class="text-xs text-slate-400 mr-3">
+                    Latest (7d): <span class="font-semibold text-blue-600">{latestRecord['7'].filter_rate.toFixed(1)}%</span>
+                  </span>
+                {/if}
+                <!-- Timeline control -->
+                <div class="flex rounded-lg border border-slate-200 overflow-hidden">
+                  {#each WINDOWS as w}
+                    <button
+                      on:click={() => setWindow(w)}
+                      class="px-3 py-1.5 text-xs font-medium transition-colors
+                        {historyWindow === w
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-600 bg-white hover:bg-slate-50'}"
+                    >{w}</button>
+                  {/each}
+                </div>
+              </div>
             </div>
-            <iframe
-              title="RPKI History from APNIC"
-              src="https://stats.labs.apnic.net/rpki/AS{rankData?.asn ?? searchValue.trim().replace(/^as/i, '')}"
-              width="100%"
-              height="900px"
-              sandbox="allow-scripts allow-same-origin"
-              class="border-0 rounded-lg"
-            ></iframe>
+
+            {#if historyLoading && !rpkiHistory.length}
+              <div class="flex items-center justify-center h-64 text-slate-400 gap-2">
+                <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                <span class="text-sm">Loading ROV history…</span>
+              </div>
+            {:else if rpkiHistory.length}
+              <div class="h-72">
+                <canvas bind:this={historyCanvas}></canvas>
+              </div>
+              <p class="mt-3 text-xs text-slate-400 text-right">
+                Data from <a href="https://stats.labs.apnic.net/rpki/AS{currentAsn}" target="_blank" rel="noopener noreferrer" class="hover:underline text-blue-500">APNIC I-ROV measurement</a>
+                · {rpkiHistory.length.toLocaleString()} daily records since {rpkiHistory[0]?.date ?? ''}
+              </p>
+            {:else if !historyLoading}
+              <div class="flex items-center justify-center h-64 text-slate-400 text-sm">
+                No ROV history available for this AS.
+              </div>
+            {/if}
           </div>
 
         {/if}

@@ -1,14 +1,15 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "bgp-inspector"
 compatibility_date = "2026-03-21"
-pages_build_output_dir = ".svelte-kit/cloudflare"
+main = ".svelte-kit/cloudflare/_worker.js"
 
-# Automatically place your workloads in an optimal location to minimize latency.
-# If you are running back-end logic in a Pages Function, running it closer to your back-end infrastructure
-# rather than the end user may result in better performance.
-# Docs: https://developers.cloudflare.com/pages/functions/smart-placement/#smart-placement
-# [placement]
-# mode = "smart"
+[assets]
+directory = ".svelte-kit/cloudflare"
+binding = "ASSETS"
 
 [vars]
 # RADAR_API_TOKEN = ""
+
+[[routes]]
+pattern = "rov.bgpkit.com"
+custom_domain = true

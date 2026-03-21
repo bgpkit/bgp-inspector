@@ -98,5 +98,7 @@ export const GET: RequestHandler = async ({ params, platform }) => {
       unknown_pct: rpkiUnknownPct,
       note: 'Route origin validity of prefixes announced by this ASN as seen by Cloudflare Radar.'
     } : null
+  }, {
+    headers: { 'Cache-Control': 'public, s-maxage=86400, stale-while-revalidate=3600' }
   });
 };

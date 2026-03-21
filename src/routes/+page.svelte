@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { tick, onDestroy } from 'svelte';
+  import { tick, onMount, onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import { Chart, DoughnutController, ArcElement, Tooltip, Legend } from 'chart.js';
   import type { ASNRecord } from '../types/ASNData';
   import type { RadarData } from '../types/RadarData';
@@ -17,6 +19,14 @@
 
   let chartCanvas: HTMLCanvasElement | null = null;
   let chart: Chart | null = null;
+
+  onMount(() => {
+    const asn = $page.url.searchParams.get('asn');
+    if (asn) {
+      searchValue = asn;
+      search();
+    }
+  });
 
   onDestroy(() => { if (chart) chart.destroy(); });
 
@@ -41,6 +51,8 @@
     radarData = null;
     hasSearched = true;
     if (chart) { chart.destroy(); chart = null; }
+
+    goto(`/?asn=${asn}`, { replaceState: true, noScroll: true, keepFocus: true });
 
     try {
       const res = await fetch(`/api/asn/${asn}`);

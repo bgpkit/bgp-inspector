@@ -181,28 +181,30 @@
         datasets: [
           {
             label: '7-day',
-            data: filtered.map(d => d['7'].filter_rate),
+            data: filtered.map(d => d['7'].seen > 0 ? d['7'].filter_rate : null),
             borderColor: '#93c5fd',
             backgroundColor: 'transparent',
             borderWidth: 1.5,
             pointRadius: 0,
             tension: 0.3,
+            spanGaps: false,
             order: 3,
           },
           {
             label: '28-day',
-            data: filtered.map(d => d['28'].filter_rate),
+            data: filtered.map(d => d['28'].seen > 0 ? d['28'].filter_rate : null),
             borderColor: '#3b82f6',
             backgroundColor: 'rgba(59,130,246,0.08)',
             fill: true,
             borderWidth: 2,
             pointRadius: 0,
             tension: 0.3,
+            spanGaps: false,
             order: 2,
           },
           {
             label: '112-day',
-            data: filtered.map(d => d['112'].filter_rate),
+            data: filtered.map(d => d['112'].seen > 0 ? d['112'].filter_rate : null),
             borderColor: '#1e40af',
             backgroundColor: 'transparent',
             borderWidth: 2.5,
@@ -270,9 +272,9 @@
     if (!historyChart) return;
     const filtered = getFilteredHistory();
     historyChart.data.labels = filtered.map(d => d.date);
-    historyChart.data.datasets[0].data = filtered.map(d => d['7'].filter_rate);
-    historyChart.data.datasets[1].data = filtered.map(d => d['28'].filter_rate);
-    historyChart.data.datasets[2].data = filtered.map(d => d['112'].filter_rate);
+    historyChart.data.datasets[0].data = filtered.map(d => d['7'].seen > 0 ? d['7'].filter_rate : null);
+    historyChart.data.datasets[1].data = filtered.map(d => d['28'].seen > 0 ? d['28'].filter_rate : null);
+    historyChart.data.datasets[2].data = filtered.map(d => d['112'].seen > 0 ? d['112'].filter_rate : null);
     historyChart.update('none');
   }
 

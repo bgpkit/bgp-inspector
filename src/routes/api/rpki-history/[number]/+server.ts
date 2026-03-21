@@ -15,5 +15,7 @@ export const GET: RequestHandler = async ({ params }) => {
   }
 
   const body = await response.json();
-  return json(body.data ?? []);
+  return json(body.data ?? [], {
+    headers: { 'Cache-Control': 'public, s-maxage=86400, stale-while-revalidate=3600' }
+  });
 };

@@ -287,6 +287,16 @@
 
   // Latest filter rate for the summary badge
   $: latestRecord = rpkiHistory.length ? rpkiHistory[rpkiHistory.length - 1] : null;
+
+  // ROV verdict derived from APNIC 7-day filter rate
+  $: rovVerdict = (() => {
+    if (historyLoading && !rpkiHistory.length) return 'loading';
+    const rate = latestRecord?.['7']?.filter_rate ?? null;
+    if (rate === null) return 'unknown';
+    if (rate >= 80) return 'yes';
+    if (rate >= 40) return 'partial';
+    return 'no';
+  })();
 </script>
 
 <div class="min-h-screen bg-slate-50 flex flex-col font-sans">
@@ -393,6 +403,92 @@
             {/if}
           </div>
 
+          <!-- ROV Verdict banner -->
+          <div class="rounded-xl border shadow-sm p-4 flex flex-wrap items-center gap-4
+            {rovVerdict === 'yes'     ? 'bg-emerald-50 border-emerald-200' :
+             rovVerdict === 'partial' ? 'bg-amber-50 border-amber-200' :
+             rovVerdict === 'no'      ? 'bg-red-50 border-red-200' :
+                                        'bg-slate-50 border-slate-200'}">
+            <div class="flex items-center gap-3">
+              {#if rovVerdict === 'yes'}
+                <div class="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.955 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                  </svg>
+                </div>
+                <div>
+                  <div class="font-bold text-emerald-800 text-base leading-tight"><abbr title="Route Origin Validation: measures what fraction of the Internet observes this AS filtering RPKI-invalid routes" class="no-underline cursor-help">RPKI ROV</abbr> Enforced</div>
+                  <div class="text-xs text-emerald-700 mt-0.5">≥80% of measurement locations observe RPKI-invalid route filtering</div>
+                </div>
+              {:else if rovVerdict === 'partial'}
+                <div class="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                  </svg>
+                </div>
+                <div>
+                  <div class="font-bold text-amber-800 text-base leading-tight">Partial <abbr title="Route Origin Validation: measures what fraction of the Internet observes this AS filtering RPKI-invalid routes" class="no-underline cursor-help">RPKI ROV</abbr></div>
+                  <div class="text-xs text-amber-700 mt-0.5">40–79% of measurement locations observe filtering — not consistent across all measurement locations</div>
+                </div>
+              {:else if rovVerdict === 'no'}
+                <div class="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </div>
+                <div>
+                  <div class="font-bold text-red-800 text-base leading-tight">No <abbr title="Route Origin Validation: measures what fraction of the Internet observes this AS filtering RPKI-invalid routes" class="no-underline cursor-help">RPKI ROV</abbr></div>
+                  <div class="text-xs text-red-700 mt-0.5">&lt;40% of measurement locations observe filtering — RPKI-invalid routes are accepted</div>
+                </div>
+              {:else if rovVerdict === 'loading'}
+                <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
+                  <svg class="animate-spin w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                </div>
+                <div>
+                  <div class="font-bold text-slate-600 text-base leading-tight">Checking RPKI ROV status…</div>
+                  <div class="text-xs text-slate-500 mt-0.5">Fetching APNIC measurement data</div>
+                </div>
+              {:else}
+                <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+                  </svg>
+                </div>
+                <div>
+                  <div class="font-bold text-slate-600 text-base leading-tight">RPKI ROV Status Unknown</div>
+                  <div class="text-xs text-slate-500 mt-0.5">No APNIC measurement data available for this AS</div>
+                </div>
+              {/if}
+            </div>
+            {#if latestRecord}
+              <div class="ml-auto flex items-center gap-6">
+                <div class="text-center">
+                  <div class="text-2xl font-bold tabular-nums
+                    {rovVerdict === 'yes' ? 'text-emerald-700' : rovVerdict === 'partial' ? 'text-amber-700' : 'text-red-700'}">
+                    {latestRecord['7'].filter_rate.toFixed(1)}%
+                  </div>
+                  <div class="text-xs text-slate-500">7-day rate</div>
+                </div>
+                <div class="text-center hidden sm:block">
+                  <div class="text-2xl font-bold text-slate-700 tabular-nums">{latestRecord['28'].filter_rate.toFixed(1)}%</div>
+                  <div class="text-xs text-slate-500">28-day rate</div>
+                </div>
+                <div class="text-center hidden sm:block">
+                  <div class="text-xs font-semibold uppercase tracking-wider px-3 py-1.5 rounded-full
+                    {rovVerdict === 'yes'     ? 'bg-emerald-100 text-emerald-800' :
+                     rovVerdict === 'partial' ? 'bg-amber-100 text-amber-800' :
+                                               'bg-red-100 text-red-800'}">
+                    {rovVerdict === 'yes' ? 'YES' : rovVerdict === 'partial' ? 'PARTIAL' : 'NO'}
+                  </div>
+                  <div class="text-xs text-slate-500 mt-1">verdict</div>
+                </div>
+              </div>
+            {/if}
+          </div>
+
           <!-- Top row: Overview + RPKI snapshot -->
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 
@@ -493,8 +589,8 @@
           <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
             <div class="flex flex-wrap items-start justify-between gap-3 mb-5">
               <div>
-                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1">ROV Filtering Rate</h2>
-                <p class="text-xs text-slate-400">% of internet vantage points enforcing RPKI for routes from AS{currentAsn}</p>
+                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1"><abbr title="Route Origin Validation: measures what fraction of the Internet observes this AS filtering RPKI-invalid routes" class="no-underline cursor-help">RPKI ROV</abbr> Filtering Rate</h2>
+                <p class="text-xs text-slate-400">% of Internet measurement locations enforcing RPKI for routes from AS{currentAsn}</p>
               </div>
               <div class="flex items-center gap-1">
                 {#if historyLoading}
@@ -526,7 +622,7 @@
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                 </svg>
-                <span class="text-sm">Loading ROV history…</span>
+                <span class="text-sm">Loading RPKI ROV history…</span>
               </div>
             {:else if rpkiHistory.length}
               <div class="h-72">
@@ -538,7 +634,7 @@
               </p>
             {:else if !historyLoading}
               <div class="flex items-center justify-center h-64 text-slate-400 text-sm">
-                No ROV history available for this AS.
+                No RPKI ROV history available for this AS.
               </div>
             {/if}
           </div>
